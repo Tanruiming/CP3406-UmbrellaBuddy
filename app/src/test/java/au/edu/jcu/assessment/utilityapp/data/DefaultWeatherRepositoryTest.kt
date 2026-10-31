@@ -46,7 +46,7 @@ class DefaultWeatherRepositoryTest {
         var receivedLocation: Coordinates? = null
         override suspend fun getForecast(latitude: Double, longitude: Double, current: String,
             hourly: String, forecastDays: Int, timezone: String, timeFormat: String,
-            temperatureUnit: String): WeatherResponse {
+            temperatureUnit: String, windSpeedUnit: String, precipitationUnit: String): WeatherResponse {
             receivedLocation = Coordinates(latitude, longitude)
             return answer()
         }

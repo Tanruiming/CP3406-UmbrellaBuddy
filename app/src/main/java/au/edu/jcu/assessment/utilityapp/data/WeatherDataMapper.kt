@@ -17,18 +17,23 @@ class WeatherDataMapper {
         val temperature = requireNotNull(current.temperature) { "Missing temperature" }
         require(temperature.isFinite()) { "Invalid temperature" }
         require(current.feelsLike == null || current.feelsLike.isFinite()) { "Invalid feels-like value" }
+        require(current.windSpeedKmh == null || (current.windSpeedKmh.isFinite() && current.windSpeedKmh >= 0)) { "Invalid wind speed" }
+        require(current.seaLevelPressureHpa == null || (current.seaLevelPressureHpa.isFinite() && current.seaLevelPressureHpa > 0)) { "Invalid pressure" }
 
         val hourly = requireNotNull(response.hourly) { "Missing hourly forecast" }
         val times = requireNotNull(hourly.time) { "Missing hourly times" }
         val probabilities = requireNotNull(hourly.rainProbability) { "Missing hourly probabilities" }
         require(times.size == probabilities.size && times.isNotEmpty()) { "Mismatched hourly arrays" }
+        require(hourly.precipitationMm == null || hourly.precipitationMm.size == times.size) { "Mismatched precipitation array" }
 
         val intervals = times.mapIndexed { index, time ->
             val end = epochTime(time)
             val probability = probabilities[index]
             require(probability == null || probability in 0..100) { "Invalid rain probability" }
+            val amount = hourly.precipitationMm?.get(index)
+            require(amount == null || (amount.isFinite() && amount >= 0)) { "Invalid precipitation amount" }
             // Open-Meteo reports precipitation probability for the preceding hour.
-            HourlyRainForecast(end.minusSeconds(3600), end, probability)
+            HourlyRainForecast(end.minusSeconds(3600), end, probability, amount)
         }
         require(intervals.zipWithNext().all { (first, second) -> first.endsAt == second.startsAt }) {
             "Hourly times must be consecutive and ordered"
@@ -45,7 +50,9 @@ class WeatherDataMapper {
             feelsLikeCelsius = current.feelsLike,
             // Unknown codes remain unavailable rather than becoming clear weather.
             weatherCode = current.weatherCode?.takeIf { it in WEATHER_CODES },
-            upcomingRain = upcoming
+            upcomingRain = upcoming,
+            windSpeedKmh = current.windSpeedKmh,
+            seaLevelPressureHpa = current.seaLevelPressureHpa
         )
     }
 

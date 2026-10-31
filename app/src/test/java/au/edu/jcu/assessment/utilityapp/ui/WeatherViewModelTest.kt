@@ -149,4 +149,111 @@ class WeatherViewModelTest {
         model.refresh(); runCurrent()
         assertEquals(WeatherUiState.Error(WeatherProblem.UNEXPECTED), model.state.value)
     }
+
+    @Test fun preferenceChangesDoNotRefetchWeatherAndRemainAfterRefresh() = runTest {
+        val repository = FakeRepository { WeatherLoadResult.Success(report) }
+        val provider = FakeLocation { LocationResult.Success(location) }
+        val model = model(repository, provider)
+        model.refresh(); runCurrent()
+        model.setTemperatureUnit(TemperatureUnit.FAHRENHEIT)
+        model.setRainThreshold(30)
+        assertEquals(WeatherSettings(TemperatureUnit.FAHRENHEIT, 30), model.settings.value)
+        assertEquals(1, repository.calls)
+        assertEquals(1, provider.calls)
+        assertEquals(WeatherUiState.Ready(location, report), model.state.value)
+        model.refresh(); runCurrent()
+        assertEquals(WeatherSettings(TemperatureUnit.FAHRENHEIT, 30), model.settings.value)
+    }
+
+    @Test fun thresholdsStayWithinSliderBoundsWithoutResettingTemperature() {
+        val model = model(FakeRepository { WeatherLoadResult.Success(report) }, FakeLocation { LocationResult.Success(location) })
+        model.setTemperatureUnit(TemperatureUnit.FAHRENHEIT)
+        model.setRainThreshold(-5)
+        assertEquals(10, model.settings.value.rainThresholdPercent)
+        model.setRainThreshold(105)
+        assertEquals(90, model.settings.value.rainThresholdPercent)
+        assertEquals(TemperatureUnit.FAHRENHEIT, model.settings.value.temperatureUnit)
+    }
+
+    private class FakeNotifier(var allowed: Boolean = true) : RainNotifier {
+        var reminders = 0
+        var cancellations = 0
+        override fun canNotify() = allowed
+        override fun showRainReminder(report: WeatherReport): Boolean { reminders++; return true }
+        override fun cancel() { cancellations++ }
+    }
+
+    @Test fun enabledRainNotificationsOnlySendAfterAFreshRainyResult() = runTest {
+        val notifier = FakeNotifier()
+        val rainy = report.copy(weather = report.weather.copy(weatherCode = 61))
+        val model = WeatherViewModel(FakeRepository { WeatherLoadResult.Success(rainy) },
+            FakeLocation { LocationResult.Success(location) }, Clock.fixed(now, ZoneOffset.UTC), notifier)
+        model.setNotificationsEnabled(true)
+        assertEquals(0, notifier.reminders)
+        model.refresh(); runCurrent()
+        assertEquals(1, notifier.reminders)
+        model.setTemperatureUnit(TemperatureUnit.FAHRENHEIT)
+        model.setRainThreshold(90)
+        assertEquals(1, notifier.reminders)
+        assertTrue(model.state.value is WeatherUiState.Ready)
+    }
+
+    @Test fun notificationsRequirePermissionAndAreOffByDefault() = runTest {
+        val notifier = FakeNotifier(false)
+        val rainy = report.copy(weather = report.weather.copy(weatherCode = 61))
+        val model = WeatherViewModel(FakeRepository { WeatherLoadResult.Success(rainy) },
+            FakeLocation { LocationResult.Success(location) }, Clock.fixed(now, ZoneOffset.UTC), notifier)
+        assertFalse(model.settings.value.rainNotificationsEnabled)
+        model.setNotificationsEnabled(true)
+        assertFalse(model.settings.value.rainNotificationsEnabled)
+        model.refresh(); runCurrent()
+        assertEquals(0, notifier.reminders)
+    }
+
+    @Test fun disablingNotificationsCancelsExistingReminder() {
+        val notifier = FakeNotifier()
+        val model = WeatherViewModel(FakeRepository { WeatherLoadResult.Success(report) },
+            FakeLocation { LocationResult.Success(location) }, Clock.fixed(now, ZoneOffset.UTC), notifier)
+        model.setNotificationsEnabled(true)
+        model.setNotificationsEnabled(false)
+        assertFalse(model.settings.value.rainNotificationsEnabled)
+        assertEquals(1, notifier.cancellations)
+    }
+
+    @Test fun notificationFailureDoesNotDiscardLoadedWeather() = runTest {
+        val notifier = object : RainNotifier {
+            override fun canNotify() = true
+            override fun showRainReminder(report: WeatherReport): Boolean = throw IllegalStateException()
+            override fun cancel() {}
+        }
+        val rainy = report.copy(weather = report.weather.copy(weatherCode = 61))
+        val model = WeatherViewModel(FakeRepository { WeatherLoadResult.Success(rainy) },
+            FakeLocation { LocationResult.Success(location) }, Clock.fixed(now, ZoneOffset.UTC), notifier)
+        model.setNotificationsEnabled(true)
+        model.refresh(); runCurrent()
+        assertEquals(WeatherUiState.Ready(location, rainy), model.state.value)
+    }
+
+    @Test fun revokedNotificationPermissionTurnsPreferenceOff() {
+        val notifier = FakeNotifier()
+        val model = WeatherViewModel(FakeRepository { WeatherLoadResult.Success(report) },
+            FakeLocation { LocationResult.Success(location) }, Clock.fixed(now, ZoneOffset.UTC), notifier)
+        model.setNotificationsEnabled(true)
+        notifier.allowed = false
+        model.onResume(true)
+        assertFalse(model.settings.value.rainNotificationsEnabled)
+        assertEquals(1, notifier.cancellations)
+    }
+
+    @Test fun freshLowRainResultClearsPreviousReminder() = runTest {
+        val notifier = FakeNotifier()
+        val dry = report.copy(weather = report.weather.copy(upcomingRain = listOf(
+            HourlyRainForecast(now.minusSeconds(1800), now.plusSeconds(1800), 10))))
+        val model = WeatherViewModel(FakeRepository { WeatherLoadResult.Success(dry) },
+            FakeLocation { LocationResult.Success(location) }, Clock.fixed(now, ZoneOffset.UTC), notifier)
+        model.setNotificationsEnabled(true)
+        model.refresh(); runCurrent()
+        assertEquals(0, notifier.reminders)
+        assertEquals(1, notifier.cancellations)
+    }
 }

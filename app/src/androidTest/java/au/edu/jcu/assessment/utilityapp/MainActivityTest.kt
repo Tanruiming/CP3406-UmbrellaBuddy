@@ -27,9 +27,12 @@ class MainActivityTest {
 
     @Test fun navigationSurvivesActivityRecreation() {
         compose.onNodeWithText("Settings").performClick()
-        compose.onNodeWithText("Manage location access").assertIsDisplayed()
+        compose.onNodeWithText("Temperature").performScrollTo().performClick()
+        compose.onNodeWithText("Fahrenheit · °F").performClick()
+        compose.onNodeWithText("°F").assertIsDisplayed()
         compose.activityRule.scenario.recreate()
-        compose.onNodeWithText("Manage location access").assertIsDisplayed()
+        compose.onNodeWithText("Temperature").performScrollTo()
+        compose.onNodeWithText("°F").assertIsDisplayed()
         compose.onNodeWithText("Weather").performClick()
         compose.onNodeWithText("Use my location").assertIsDisplayed()
     }

@@ -29,12 +29,45 @@ enum class WeatherProblem {
 class WeatherViewModel(
     private val repository: WeatherRepository,
     private val locationProvider: LocationProvider,
-    private val clock: Clock = Clock.systemUTC()
+    private val clock: Clock = Clock.systemUTC(),
+    private val rainNotifier: RainNotifier? = null
 ) : ViewModel() {
     private val mutableState = MutableStateFlow<WeatherUiState>(WeatherUiState.Idle)
     val state: StateFlow<WeatherUiState> = mutableState.asStateFlow()
+    private val mutableSettings = MutableStateFlow(WeatherSettings())
+    val settings: StateFlow<WeatherSettings> = mutableSettings.asStateFlow()
     private var activeLoad: Job? = null
     private var generation = 0
+
+    fun setTemperatureUnit(unit: TemperatureUnit) {
+        mutableSettings.value = settings.value.copy(temperatureUnit = unit)
+    }
+
+    fun setRainThreshold(percent: Int) {
+        mutableSettings.value = settings.value.copy(rainThresholdPercent = percent.coerceIn(10, 90))
+    }
+
+    fun updateSettings(value: WeatherSettings) {
+        mutableSettings.value = value.copy(rainNotificationsEnabled = value.rainNotificationsEnabled && rainNotifier?.canNotify() == true)
+    }
+
+    fun setNotificationsEnabled(enabled: Boolean) {
+        updateSettings(settings.value.copy(rainNotificationsEnabled = enabled))
+        if (!settings.value.rainNotificationsEnabled) rainNotifier?.cancel()
+    }
+
+    private fun notifyIfNeeded(report: WeatherReport) {
+        val preferences = settings.value
+        if (preferences.rainNotificationsEnabled && rainNotifier?.canNotify() == true) {
+            try {
+                if (umbrellaAdvice(report, clock.instant(), preferences.rainThresholdPercent) == UmbrellaAdvice.BRING_UMBRELLA) {
+                    rainNotifier.showRainReminder(report)
+                } else rainNotifier.cancel()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) { /* A reminder failure must not discard weather. */ }
+        }
+    }
 
     fun refresh() {
         activeLoad?.cancel()
@@ -66,6 +99,7 @@ class WeatherViewModel(
                                 WeatherFailure.UNEXPECTED -> WeatherProblem.UNEXPECTED
                             })
                         }
+                        if (weather is WeatherLoadResult.Success) notifyIfNeeded(weather.report)
                     }
                 }
             } catch (cancelled: CancellationException) {
@@ -84,6 +118,7 @@ class WeatherViewModel(
     }
 
     fun onResume(hasPermission: Boolean) {
+        if (settings.value.rainNotificationsEnabled && rainNotifier?.canNotify() != true) setNotificationsEnabled(false)
         if (!hasPermission && state.value != WeatherUiState.Idle) permissionDenied()
         else if (hasPermission && state.value == WeatherUiState.Error(WeatherProblem.PERMISSION_REQUIRED)) refresh()
         else if (hasPermission && (state.value as? WeatherUiState.Ready)?.report?.let {

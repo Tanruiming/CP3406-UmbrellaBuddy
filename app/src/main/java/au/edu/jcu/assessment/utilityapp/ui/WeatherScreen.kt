@@ -29,7 +29,8 @@ fun WeatherScreen(
     onAppSettings: () -> Unit,
     onLocationSettings: () -> Unit,
     onCancel: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    settings: WeatherSettings = WeatherSettings()
 ) {
     LazyColumn(
         modifier = modifier.fillMaxSize(),
@@ -40,7 +41,7 @@ fun WeatherScreen(
             Text("UMBRELLA BUDDY", style = MaterialTheme.typography.labelLarge,
                 letterSpacing = 2.sp, color = MaterialTheme.colorScheme.primary)
             Spacer(Modifier.height(8.dp))
-            Text("Before you head out", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold)
+            Text("Before you head out", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
             Text("A quick weather check for where you are.", style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
@@ -73,7 +74,7 @@ fun WeatherScreen(
                 val zone = report.weather.timeZone
                 val upcoming = report.weather.upcomingRain.filter { it.endsAt > now }
                 val stale = now < report.fetchedAt || now >= report.fetchedAt.plusSeconds(600) || upcoming.isEmpty()
-                val advice = umbrellaAdvice(report, now)
+                val advice = umbrellaAdvice(report, now, settings.rainThresholdPercent)
                 item {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Column(Modifier.weight(1f)) {
@@ -87,7 +88,7 @@ fun WeatherScreen(
                         OutlinedButton(onClick = onLocate) { Text("Refresh") }
                     }
                 }
-                item { AdviceCard(advice, upcoming.mapNotNull { it.probabilityPercent }.maxOrNull()) }
+                item { AdviceCard(advice, upcoming.mapNotNull { it.probabilityPercent }.maxOrNull(), settings.rainThresholdPercent) }
                 if (stale) item {
                     Text("This forecast needs refreshing. Tap Refresh before relying on the advice.",
                         color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
@@ -96,11 +97,31 @@ fun WeatherScreen(
                     SectionCard {
                         Text(weatherDescription(report.weather.weatherCode), style = MaterialTheme.typography.titleMedium)
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                            TemperatureMetric("Temperature", report.weather.temperatureCelsius, Modifier.weight(1f))
-                            TemperatureMetric("Feels like", report.weather.feelsLikeCelsius, Modifier.weight(1f))
+                            TemperatureMetric("Temperature", report.weather.temperatureCelsius, settings.temperatureUnit, Modifier.weight(1f))
+                            TemperatureMetric("Feels like", report.weather.feelsLikeCelsius, settings.temperatureUnit, Modifier.weight(1f))
                         }
                         Text("Conditions at ${formatTime(report.weather.observedAt, zone)}",
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                item {
+                    SectionCard {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text("Wind speed", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(report.weather.windSpeedKmh?.let { String.format(Locale.ENGLISH, "%.1f %s", settings.windSpeedUnit.fromKmh(it), settings.windSpeedUnit.symbol) } ?: "—",
+                                    style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                                Text("At 10 m", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text("Pressure", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(report.weather.seaLevelPressureHpa?.let {
+                                    String.format(Locale.ENGLISH, if (settings.pressureUnit == PressureUnit.INCHES_OF_MERCURY) "%.2f %s" else "%.0f %s",
+                                        settings.pressureUnit.fromHpa(it), settings.pressureUnit.symbol)
+                                } ?: "—", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                                Text("Sea-level", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
                     }
                 }
                 item {
@@ -119,6 +140,10 @@ fun WeatherScreen(
                                         style = MaterialTheme.typography.bodySmall)
                                     Text(period.probabilityPercent?.let { "$it%" } ?: "—",
                                         style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
+                                    if (period.precipitationMm != null) Text(
+                                        String.format(Locale.ENGLISH, if (settings.precipitationUnit == PrecipitationUnit.INCHES) "%.2f %s" else "%.1f %s",
+                                            settings.precipitationUnit.fromMillimetres(period.precipitationMm), settings.precipitationUnit.symbol),
+                                        style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
                                     if (period.probabilityPercent != null) LinearProgressIndicator(
                                         progress = { period.probabilityPercent / 100f }, modifier = Modifier.fillMaxWidth())
                                     Text(if (period.probabilityPercent == null) "Unavailable"
@@ -146,22 +171,22 @@ fun WeatherScreen(
 }
 
 @Composable
-private fun AdviceCard(advice: UmbrellaAdvice, highestChance: Int?) {
+private fun AdviceCard(advice: UmbrellaAdvice, highestChance: Int?, threshold: Int) {
     val title = when (advice) {
         UmbrellaAdvice.BRING_UMBRELLA -> "Bring an umbrella"
         UmbrellaAdvice.RAIN_LESS_LIKELY -> "Rain looks less likely"
         UmbrellaAdvice.CHECK_FORECAST -> "Keep an eye on the sky"
     }
     val detail = when (advice) {
-        UmbrellaAdvice.BRING_UMBRELLA -> "Rain is indicated by current conditions, a nearby forecast or an hourly chance of at least 50%."
-        UmbrellaAdvice.RAIN_LESS_LIKELY -> "The available hourly chances are below 50%. Rain is still possible."
+        UmbrellaAdvice.BRING_UMBRELLA -> "Rain is indicated by current conditions, a nearby forecast or an hourly chance of at least $threshold%."
+        UmbrellaAdvice.RAIN_LESS_LIKELY -> "The available hourly chances are below $threshold%. Rain is still possible."
         UmbrellaAdvice.CHECK_FORECAST -> "Some information is missing or needs refreshing. Carry a small umbrella if unsure."
     }
     Card(shape = RoundedCornerShape(24.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
         Column(Modifier.fillMaxWidth().padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            UmbrellaDrawing(MaterialTheme.colorScheme.onPrimaryContainer, Modifier.size(56.dp))
+            UmbrellaDrawing(MaterialTheme.colorScheme.onPrimaryContainer, Modifier.size(44.dp))
             Text(title, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-            Text(detail, style = MaterialTheme.typography.bodyMedium)
+            Text(detail, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
             if (highestChance != null) Text("Highest upcoming hourly chance: $highestChance%", style = MaterialTheme.typography.labelLarge)
         }
     }
@@ -211,10 +236,10 @@ private fun ErrorCard(problem: WeatherProblem, onRetry: () -> Unit, onAppSetting
 }
 
 @Composable
-private fun TemperatureMetric(label: String, celsius: Double?, modifier: Modifier = Modifier) {
+private fun TemperatureMetric(label: String, celsius: Double?, unit: TemperatureUnit, modifier: Modifier = Modifier) {
     Column(modifier) {
         Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(celsius?.let { "${it.roundToInt()}°C" } ?: "—", style = MaterialTheme.typography.displaySmall)
+        Text(celsius?.let { "${unit.fromCelsius(it).roundToInt()}${unit.symbol}" } ?: "—", style = MaterialTheme.typography.displaySmall)
     }
 }
 

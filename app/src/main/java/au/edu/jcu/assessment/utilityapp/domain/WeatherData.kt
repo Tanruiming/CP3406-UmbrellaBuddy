@@ -16,14 +16,17 @@ data class WeatherSnapshot(
     val temperatureCelsius: Double,
     val feelsLikeCelsius: Double?,
     val weatherCode: Int?,
-    val upcomingRain: List<HourlyRainForecast>
+    val upcomingRain: List<HourlyRainForecast>,
+    val windSpeedKmh: Double? = null,
+    val seaLevelPressureHpa: Double? = null
 )
 
 // Probability applies to this whole hour; the first interval may already have begun.
 data class HourlyRainForecast(
     val startsAt: Instant,
     val endsAt: Instant,
-    val probabilityPercent: Int?
+    val probabilityPercent: Int?,
+    val precipitationMm: Double? = null
 )
 
 // The nearest reference point is an approximation, not a district boundary lookup.
