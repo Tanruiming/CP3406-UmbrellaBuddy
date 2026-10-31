@@ -40,8 +40,10 @@ class AndroidLocationProvider(context: Context) : LocationProvider {
             if (!LocationManagerCompat.isLocationEnabled(manager)) return LocationResult.Failure(LocationFailure.DISABLED)
             val fine = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
             val providers = buildList {
-                if (Build.VERSION.SDK_INT >= 31) add(LocationManager.FUSED_PROVIDER)
+                // With precise access, request a fresh GPS fix before accepting a fused estimate.
+                // Some emulators keep returning their default fused location after a GPS point changes.
                 if (fine) add(LocationManager.GPS_PROVIDER)
+                if (Build.VERSION.SDK_INT >= 31) add(LocationManager.FUSED_PROVIDER)
                 add(LocationManager.NETWORK_PROVIDER)
             }.filter { manager.allProviders.contains(it) && manager.isProviderEnabled(it) }
             if (providers.isEmpty()) return LocationResult.Failure(LocationFailure.UNAVAILABLE)
